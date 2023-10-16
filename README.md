@@ -9,7 +9,8 @@
 - 모델 gpt3.5 적용
 - 2023.09.12 시작
 
-
+https://github.com/louis-li/SqlGPT.git
+기반으로 작업
   
 </p>
 
@@ -51,8 +52,6 @@ Note: Make sure you have docker installed
 6. Navigate to http://localhost:5010/
 
 To stop just run Ctrl + C
-
-REPO : https://github.com/louis-li/SqlGPT.git
 
 Built with [🦜️🔗 LangChain](https://github.com/hwchase17/langchain)
 
