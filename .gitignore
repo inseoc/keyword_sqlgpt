@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# MY file & code
+sqlgpt_code 분석.txt
+SQLGPT_PROMPT.txt
+backup/
+
 # Distribution / packaging
 .Python
 build/
