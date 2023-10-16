@@ -1,3 +1,14 @@
+<h1 align="center">
+  Keyword SQL GPT
+</h1>
+
+키워드를 기반으로 MS-SQL 쿼리를 생성해주는 OpenAI 기반 챗봇
+- ㅇㄹㄹㅇ
+
+
+
+
+
 
 <h1 align="center">
   ChatGPT with SQL Server by Azure OpenAI  💡
