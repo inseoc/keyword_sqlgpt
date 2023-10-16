@@ -1,3 +1,4 @@
+
 <h1 align="center">
   ChatGPT with SQL Server by Azure OpenAI  💡
 </h1>
@@ -33,7 +34,7 @@ Note: Make sure you have docker installed
 
 To stop just run Ctrl + C
 
-
+REPO : https://github.com/louis-li/SqlGPT.git
 
 Built with [🦜️🔗 LangChain](https://github.com/hwchase17/langchain)
 
