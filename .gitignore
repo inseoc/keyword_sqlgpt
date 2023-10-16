@@ -10,6 +10,7 @@ __pycache__/
 sqlgpt_code 분석.txt
 SQLGPT_PROMPT.txt
 backup/
+application/AzureOpenAIUtil/agent/SqlServerAgent.py
 
 # Distribution / packaging
 .Python
