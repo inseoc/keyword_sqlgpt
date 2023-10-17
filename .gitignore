@@ -11,6 +11,7 @@ sqlgpt_code 분석.txt
 SQLGPT_PROMPT.txt
 backup/
 config.py
+=======
 
 # Distribution / packaging
 .Python
