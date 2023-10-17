@@ -1,6 +1,7 @@
 import urllib, os
 from AzureOpenAIUtil.agent.SqlServerAgent import create_sql_agent, SQLDatabaseToolkit, SQLDatabase, HtmlCallbackHandler
 from langchain.callbacks.base import CallbackManager
+# from langchain.callbacks.manager import CallbackManager
 from langchain.llms.openai import AzureOpenAI
 from langchain.agents import AgentExecutor
 
@@ -12,7 +13,7 @@ class SqlServer:
         
         odbc_conn = 'Driver={ODBC Driver '+ str(odbc_ver) + ' for SQL Server};Server=tcp:' + \
             Server + f';Database={Database};Uid={Username};Pwd={Password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;'
-        params = urllib.parse.quote_plus(odbc_conn)
+        params = urllib.parse.quote_plus(odbc_conn) # url 값이 깨지지 않게 보완 및 변환시켜주는 함수(url 주소 내 한글이 있으면 특수문자 및 영어로 치환하는 등)
         self.conn_str = 'mssql+pyodbc:///?odbc_connect={}'.format(params)
 
 

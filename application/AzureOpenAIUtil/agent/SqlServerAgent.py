@@ -18,6 +18,7 @@ from pydantic import BaseModel, Extra, Field, validator
 import os
 from langchain.chains.llm import LLMChain
 from langchain.llms.openai import AzureOpenAI
+from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.tools.base import BaseTool
 from typing import Any, List, Optional
@@ -538,7 +539,8 @@ class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
     template: str = QUERY_CHECKER
     llm_chain: LLMChain = Field(
         default_factory=lambda: LLMChain(
-            llm=AzureOpenAI(temperature=0, deployment_name=os.getenv('DEPLOYMENT_NAME')),
+            # llm=AzureOpenAI(temperature=0, deployment_name=os.getenv('DEPLOYMENT_NAME'))
+            llm=ChatOpenAI(temperature=0, engine=os.getenv('DEPLOYMENT_NAME')),
             prompt=PromptTemplate(
                 template=QUERY_CHECKER, input_variables=["query", "dialect"]
             ),
