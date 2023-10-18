@@ -1,7 +1,7 @@
 import urllib, os
 from AzureOpenAIUtil.agent.SqlServerAgent import create_sql_agent, SQLDatabaseToolkit, SQLDatabase, HtmlCallbackHandler
-from langchain.callbacks.base import CallbackManager
-# from langchain.callbacks.manager import CallbackManager
+# from langchain.callbacks.base import CallbackManager
+from langchain.callbacks.manager import CallbackManager
 from langchain.llms.openai import AzureOpenAI
 from langchain.agents import AgentExecutor
 
@@ -28,6 +28,7 @@ class SqlServer:
             )
         
     def run(self, text: str):
+
         answer =  self.agent_executor.run(text)
         thought_process = self.cb_handler.get_and_reset_log()
         return answer, thought_process

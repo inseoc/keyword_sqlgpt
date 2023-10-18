@@ -1,6 +1,6 @@
 """SQL agent."""
 from __future__ import annotations
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 import ast
 
 from langchain.agents.agent import AgentExecutor
@@ -43,6 +43,8 @@ SQL_PREFIX = """You are an agent designed to interact with a Microsoft Azure SQL
         You have access to tools for interacting with the database.
         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
+        
+        If you encounter "Invalid column name" error in Observation, Use "JOIN" statement and Find proper column name.
 
         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
@@ -60,16 +62,27 @@ Thought: I should look at the tables in the database to see what I can query.
 QUERY_CHECKER = """
 {query}
 Double check the {dialect} query above for common mistakes, including:
-- Using NOT IN with NULL values
-- Using UNION when UNION ALL should have been used
 - Using BETWEEN for exclusive ranges
 - Data type mismatch in predicates
 - Properly quoting identifiers
 - Using the correct number of arguments for functions
-- Casting to the correct data type
-- Using the proper columns for joins
+- Using the JOIN syntax for finding proper columns
 
 If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query."""
+
+# QUERY_CHECKER = """
+# {query}
+# Double check the {dialect} query above for common mistakes, including:
+# - Using NOT IN with NULL values
+# - Using UNION when UNION ALL should have been used
+# - Using BETWEEN for exclusive ranges
+# - Data type mismatch in predicates
+# - Properly quoting identifiers
+# - Using the correct number of arguments for functions
+# - Casting to the correct data type
+# - Using the proper columns for joins
+
+# If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query."""
 
 def _format_index(index: dict) -> str:
     return (
@@ -500,7 +513,7 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
 
 
 class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
-    """Tool for getting metadata about a SQL database."""
+    """Tool for getting metadata about a SQL database.(a comma-separated)"""
 
     name = "schema_sql_db"
     description = """
@@ -513,6 +526,11 @@ class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
     def _run(self, table_names: str) -> str:
         """Get the schema for tables in a comma-separated list."""
         return self.db.get_table_info_no_throw(table_names.split(", "))
+    # def _run(self, table_names: str) -> str:
+    #     """Get the schema for tables in a double-hash separated list."""
+    #     # breakpoint()
+    #     return self.db.get_table_info_no_throw(table_names.split(", "))
+
 
     async def _arun(self, table_name: str) -> str:
         raise NotImplementedError("SchemaSqlDbTool does not support async")
@@ -522,11 +540,68 @@ class ListSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
     """Tool for getting tables names."""
 
     name = "list_tables_sql_db"
-    description = "Input is an empty string, output is a comma separated list of tables in the database."
+    description = "Input is an empty string, output is a comma separated list of tables and list in the database."
+    # description = "Input is an empty string, output is double-hash separated list of tables and list of each table's description in the database."
+
+    desc_query = '''
+        SELECT B.name, cast(A.value as nvarchar(200)) as description
+        FROM  SYS.extended_properties A 
+        LEFT OUTER JOIN SYSOBJECTS B 
+            ON A.major_id = B.id 
+        WHERE B.name = '{}'
+        '''
+    
+    # TABLE_SELECTOR = """
+    # {query}
+    # Double check the {dialect} query above for common mistakes, including:
+    # - Using BETWEEN for exclusive ranges
+    # - Data type mismatch in predicates
+    # - Properly quoting identifiers
+    # - Using the correct number of arguments for functions
+    # - Using the JOIN syntax for finding proper columns
+
+    # If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query."""
+
+    # description = """
+    # {table_desc}
+    # These are double-hash separated list of tables and list of each table's description.
+
+    # The description of each table is organized as follows.
+    # Table_Name:Table_Description // Tables that refers to the Table_Name
+    # Example Input) "플랜내역:단체고객에 대한 데이터를 관리하는 테이블 // 조직월기본, 단체고객기본 ##Table_Name2:Table_Description2 // Referred Table2 ##Table_Name3 ..."
+
+    # Select proper tables to answer user's question based on the Table_Name and the description of each table.
+
+    # output is the schema and sample rows for those tables.
+    # Be sure that the tables actually exist by calling list_tables_sql_db first!
+    # """    
+
 
     def _run(self, tool_input: str = "") -> str:
         """Get the schema for a specific table."""
         return ", ".join(self.db.get_usable_table_names())
+
+    # def _run(self, tool_input: str = ""):
+    #     """Get the schema for a specific table and each table's desc"""
+    #     table_names = self.db.get_usable_table_names()
+    #     table_descs = []
+
+    #     for name in table_names:
+    #         table_desc = self.db._engine.execute(
+    #             self.desc_query.format(name[4:])    # 'dbo.' -> 이 부분 제거하려고 슬라이싱
+    #             ).fetchall()[0][1]
+            
+    #         if table_desc is None:
+    #             # raise print(f"The Table {name}'s description is None")
+    #             print(f"The Table {name}'s description is Empty.")
+    #             pass
+
+    #         else:
+    #             table_descs.append([name, table_desc])
+        
+    #     return "// ".join([":".join(table_des) for table_des in table_descs])
+        # return 'name1:desc1, name2:desc2, ...' 와 같은 str type 데이터로 변환
+
 
     async def _arun(self, tool_input: str = "") -> str:
         raise NotImplementedError("ListTablesSqlDbTool does not support async")
@@ -535,7 +610,7 @@ class ListSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
 class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
     """Use an LLM to check if a query is correct.
     Adapted from https://www.patterns.app/blog/2023/01/18/crunchbot-sql-analyst-gpt/"""
-
+    # print(os.getenv('OPENAI_API_KEY'), type(os.getenv('OPENAI_API_KEY')))
     template: str = QUERY_CHECKER
     llm_chain: LLMChain = Field(
         default_factory=lambda: LLMChain(
@@ -596,6 +671,29 @@ class SQLDatabaseToolkit(BaseToolkit):
         ]
 
 
+def get_desc_from_table(table_name:str):
+    table_name
+    pass
+
+
+def create_prompt(
+        tools: Sequence[BaseTool],
+        prefix: str = SQL_PREFIX,
+        suffix: str = SQL_SUFFIX,
+        format_instructions: str = FORMAT_INSTRUCTIONS,
+        input_variables: Optional[List[str]] = None,
+    ):
+
+    tool_strings = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
+    tool_names = ", ".join([tool.name for tool in tools])
+    format_instructions = FORMAT_INSTRUCTIONS.format(tool_names=tool_names)
+    template = "\n\n".join([prefix, tool_strings, format_instructions, suffix])
+
+    if input_variables is None:
+        input_variables = ["input", "agent_scratchpad"]
+    
+    return PromptTemplate(template=template, input_variables=input_variables)
+
 
 def create_sql_agent(
     llm: BaseLLM,
@@ -613,28 +711,37 @@ def create_sql_agent(
 ) -> AgentExecutor:
     """Construct a sql agent from an LLM and tools."""
     tools = toolkit.get_tools()
+    toolkit_names = list(map(lambda x: x.name, tools))
+
     prefix = prefix.format(dialect=toolkit.dialect, top_k=top_k)
-    prompt = ZeroShotAgent.create_prompt(
+
+    '''
+    23.09.21 환경구축 및 코드 분석 후 개발
+    코드를 좀 더 눈에 익히기 위해 ZeroShotAgent.create_prompt 말고 직접 작성
+    '''
+
+    prompt = create_prompt(
         tools,
         prefix=prefix,
         suffix=suffix,
         format_instructions=format_instructions,
         input_variables=input_variables,
     )
+
     llm_chain = LLMChain(
         llm=llm,
         prompt=prompt,
         # verbose=verbose,
         callback_manager=callback_manager,
     )
-    tool_names = [tool.name for tool in tools]
-    agent = ZeroShotAgent(llm_chain=llm_chain, allowed_tools=tool_names,callback_manager=callback_manager, **kwargs)
+    
+    agent = ZeroShotAgent(llm_chain=llm_chain, allowed_tools=toolkit_names,callback_manager=callback_manager, **kwargs)
+
     return AgentExecutor.from_agent_and_tools(
         agent=agent,
-        tools=toolkit.get_tools(),
+        tools=tools,
         verbose=verbose,
         max_iterations=max_iterations,
         early_stopping_method=early_stopping_method,
         callback_manager=callback_manager
     )
-
