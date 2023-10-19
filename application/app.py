@@ -6,7 +6,8 @@ import asyncio
 import dotenv
 import requests
 from flask import Flask, request, render_template, send_from_directory, jsonify
-from langchain.llms import AzureOpenAI
+# from langchain.llms import AzureOpenAI
+from langchain.chat_models import ChatOpenAI
 
 from langchain.chains import LLMChain, ConversationalRetrievalChain
 from langchain.chains.conversational_retrieval.prompts import CONDENSE_QUESTION_PROMPT
@@ -75,22 +76,31 @@ def api_answer():
     # topK=data['topK']
     print('-' * 5)
     os.environ['OPENAI_API_BASE']= get_value(data['openai_base'], "OPENAI_API_BASE")
-    llm=AzureOpenAI(temperature=0,
-                    openai_api_key = get_value(data['openai_key'], "OPENAI_API_KEY"),
-                    deployment_name=get_value(data['openai_deployment'], "DEPLOYMENT_NAME"))
-    print("Deployment name: ", llm.deployment_name)
+    # llm=AzureOpenAI(temperature=0,
+    #                 openai_api_key = get_value(data['openai_key'], "OPENAI_API_KEY"),
+    #                 deployment_name=get_value(data['openai_deployment'], "DEPLOYMENT_NAME"),
+    #                 max_retries=2)
+    llm = ChatOpenAI(temperature=0,
+                    #  openai_api_key=OPENAI_API_KEY,
+                     model_name=get_value(data['openai_deployment'], "DEPLOYMENT_NAME"),
+                     engine=get_value(data['openai_deployment'], "DEPLOYMENT_NAME"))
+  
+  
+    # print("Deployment name: ", llm.deployment_name)
     sql_agent = SqlServer.SqlServer(llm, 
                                     Server=get_value(data['sqlserver'], 'AZURE_SQL_SERVER'), 
                                     Database=get_value(data['database'], 'AZURE_SQL_DATABASE'), 
                                     Username=get_value(data['username'], 'AZURE_SQL_USERNAME'), 
                                     Password=get_value(data['password'], 'AZURE_SQL_PASSWORD'), 
-                                    topK=15)
+                                    topK=os.getenv('TOP_K'),
+                                    question=question
+                                    )
 
     # use try and except  to check for exception
     try:
 
         answer, thought = sql_agent.run(question)
-        print(thought)
+        # print(thought)
 
         return {'answer':answer, 'thought': thought}
     except Exception as e:
@@ -144,4 +154,6 @@ def after_request(response):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5010)
+    # app.run(debug=True, port=5010)
+    # app.run(host='0.0.0.0', debug=True)
+    app.run(debug=True, port=1234)

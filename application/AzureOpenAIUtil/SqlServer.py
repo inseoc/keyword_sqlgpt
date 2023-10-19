@@ -9,7 +9,7 @@ class SqlServer:
     cb_handler = HtmlCallbackHandler()
     cb_manager = CallbackManager(handlers=[cb_handler])
 
-    def __init__(self, llm, Server, Database, Username, Password, port=1433, odbc_ver=18, topK=10) -> None:
+    def __init__(self, llm, Server, Database, Username, Password, port=1433, odbc_ver=18, topK=10, question='') -> None:
         
         odbc_conn = 'Driver={ODBC Driver '+ str(odbc_ver) + ' for SQL Server};Server=tcp:' + \
             Server + f';Database={Database};Uid={Username};Pwd={Password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;'
@@ -23,8 +23,9 @@ class SqlServer:
         self.agent_executor = create_sql_agent(llm,
                 toolkit=self.toolkit,
                 verbose=True,
-                topK = topK,
-                callback_manager=self.cb_manager
+                topK=topK,
+                callback_manager=self.cb_manager,
+                question=question
             )
         
     def run(self, text: str):
