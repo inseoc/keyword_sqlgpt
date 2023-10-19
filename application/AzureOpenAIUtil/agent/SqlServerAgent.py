@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Any, List, Optional, Sequence
 import ast
+import re
 
 from langchain.agents.agent import AgentExecutor
 from langchain.agents.mrkl.base import ZeroShotAgent
@@ -44,7 +45,8 @@ SQL_PREFIX = """You are an agent designed to interact with a Microsoft Azure SQL
         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
         
-        If you encounter "Invalid column name" error in Observation, Use "JOIN" statement and Find proper column name.
+        If you encounter "Invalid column name" error in Observation, Use 'JOIN' statement and Find proper column name.
+        If you constantly encounter "Invalid column name" error in Observation, Use 'list_tables_sql_db' tool again.
 
         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
@@ -58,7 +60,6 @@ Thought: I should look at the tables in the database to see what I can query.
 {agent_scratchpad}"""
 
 
-
 QUERY_CHECKER = """
 {query}
 Double check the {dialect} query above for common mistakes, including:
@@ -69,6 +70,32 @@ Double check the {dialect} query above for common mistakes, including:
 - Using the JOIN syntax for finding proper columns
 
 If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query."""
+
+
+TABLE_SELECTOR = '''
+[QUESTION]
+{question}
+
+When a user asks the 'QUESTION' above, look at the DB table name and the table description below to decide which table to use.
+You can use more than one table.
+
+The OUTPUT is the table name to be used and the data format must be 'str'.
+
+Look at an example of the form of input and output and reflect them to return the OUTPUT for the INPUT.
+
+Examples of input:
+[Table name 1: Table description 1]
+[Table name 2: Table description 2]
+[Table name 3: Table description 3]
+
+Example output:
+"Table name 2, table name 3."
+
+INPUT:
+{table_desc}
+
+OUTPUT:
+'''
 
 # QUERY_CHECKER = """
 # {query}
@@ -101,7 +128,8 @@ class SQLDatabase:
         metadata: Optional[MetaData] = None,
         ignore_tables: Optional[List[str]] = None,
         include_tables: Optional[List[str]] = None,
-        sample_rows_in_table_info: int = 2,
+        # sample_rows_in_table_info: int = 2,
+        sample_rows_in_table_info: int = 0,
         indexes_in_table_info: bool = False,
         custom_table_info: Optional[dict] = None,
         view_support: Optional[bool] = False,
@@ -231,9 +259,7 @@ class SQLDatabase:
                 raise ValueError(f"table_names {missing_tables} not found in database")
             all_table_names = table_names
 
-        meta_tables = [
-            tbl for tbl  in set(all_table_names)
-        ]
+        meta_tables = [tbl for tbl  in set(all_table_names)]
 
         tables = []
         for table in meta_tables:
@@ -255,6 +281,8 @@ class SQLDatabase:
             # )
             # if has_extra_info:
             #     table_info += "\n\n/*"
+
+            # 1. 한 테이블에 대한 모든 컬럼명, 데이터타입, max-length 를 조회하는 쿼리
             get_table_info_query = f"""
                 SELECT c.name AS 'Column Name', t.name AS 'Data Type', c.max_length AS 'Max Length'
                 FROM sys.columns c
@@ -262,7 +290,7 @@ class SQLDatabase:
                 WHERE c.object_id =  object_id('{table}')
                 """
             table_info = f"Table Name: {table}\n"
-            columns = self.run_no_throw(get_table_info_query)
+            columns = self.run_no_throw(get_table_info_query)   # 참고로 columns 의 type은 str 이다.
             table_info += "(Column Name,Data Type,Max Length)\n" 
             table_info += str(columns)
             # col_list = ast.literal_eval(columns)
@@ -270,6 +298,25 @@ class SQLDatabase:
             #     table_info += f"{col[0]}\t{col[1]}\t{col[2]}\n"
             # table_info += ")\n"
 
+            # 2. 각 컬럼에 대한 설명을 조회하는 쿼리 // 23.09.26
+            columns = re.sub(r'\[\]', '', columns)  # 양쪽 대괄호 제거
+            columns = re.findall(r"\('(.*?)', '(.*?)', (\d+)\)", columns)   # [(Column Name,Data Type,Max Length)] 형식의 리스트로 변환
+            table_info += f"\n(Column's description in {table}):\n"
+            col_names = list(map(lambda x: x[0], columns))
+            
+            for col_name in col_names:
+                get_col_desc_query = f"""
+                SELECT cast(VALUE as nvarchar(100)) as column_description 
+                FROM ::FN_LISTEXTENDEDPROPERTY(NULL, 'SCHEMA', 'dbo', 'TABLE', '{table[4:]}', 'COLUMN', '{col_name}')
+                """
+                
+                col_desc = self.run_no_throw(get_col_desc_query)
+                
+                if col_desc != '[]':
+                    col_desc = re.sub(r'[\'\(\)\[\]]', '', col_desc)[:-1]
+                    table_info += f"{col_name} description: {col_desc}\n"
+
+            # 3. 외래 키를 조회하는 쿼리
             get_table_fk_query = f"""
             SELECT fk.name AS NameOfForeignKey
                 ,t.name AS FKTableName
@@ -287,9 +334,10 @@ class SQLDatabase:
                 where t.object_id=object_id('{table}')
             """
             fk_info = self.run_no_throw(get_table_fk_query)
-            if fk_info!='[]':
+            if fk_info != '[]':
                 table_info += f"Foreign Key Info: {fk_info}\n"
-
+            
+            # 4. sample row 를 일정 개수만큼만 추출 / default : _sample_rows_in_table_info = 2
             if self._sample_rows_in_table_info:
                 get_sample_rows_query = f"""
                 SELECT TOP {self._sample_rows_in_table_info} *
@@ -299,6 +347,51 @@ class SQLDatabase:
             tables.append(table_info)
         final_str = "\n\n".join(tables)
         return final_str
+    
+
+    def get_table_desc(self, table_names: Optional[List[str]] = None) -> str:
+
+        all_table_names = self.get_usable_table_names()
+
+        if table_names is not None:
+            missing_tables = set(table_names).difference(all_table_names)
+            if missing_tables:
+                raise ValueError(f"table_names {missing_tables} not found in database")
+            all_table_names = table_names
+
+        meta_tables = [tbl for tbl  in set(all_table_names)]
+        table_info = ''
+        for table in meta_tables:
+
+            # add create table command
+            table_name = table.split('.')
+
+            if len(table_name) == 2:
+                table_name = table_name[1] 
+
+            get_table_desc_query = f"""
+                SELECT cast(A.value as nvarchar(200)) as description
+                FROM  SYS.extended_properties A 
+                    LEFT OUTER JOIN SYSOBJECTS B 
+                    ON A.major_id = B.id
+                WHERE B.name = '{table_name}'
+                AND A.minor_id = '0'
+                """
+
+            tab_desc = self.run_no_throw(get_table_desc_query)
+
+            if tab_desc != '[]':
+                tab_desc = re.sub(r'[\'\(\)\[\]]', '', tab_desc)[:-1]
+            
+            else:
+                raise print(f"{table}'s description data is None. Insert some data.")
+
+            table_info += f"[{table} : {str(tab_desc)}]\n"
+
+        breakpoint()
+
+        return table_info
+
 
     def _get_table_indexes(self, table: Table) -> str:
         indexes = self._inspector.get_indexes(table.name)
@@ -480,6 +573,8 @@ class HtmlCallbackHandler (BaseCallbackHandler):
         """Do nothing."""
         pass
 
+
+# 밑 코드부터는 Custom tools 가 등장하는데, description 에서는 how/when/why 가 명확하게 들어가야 한다.
 class BaseSQLDatabaseTool(BaseModel):
     """Base tool for interacting with a SQL database."""
 
@@ -516,92 +611,100 @@ class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
     """Tool for getting metadata about a SQL database.(a comma-separated)"""
 
     name = "schema_sql_db"
-    description = """
-    Input to this tool is a comma-separated list of tables, output is the schema and sample rows for those tables.
-    Be sure that the tables actually exist by calling list_tables_sql_db first!
+    # description = """
+    # Input to this tool is a comma-separated list of tables, output is the schema and sample rows for those tables.
+    # Be sure that the tables actually exist by calling list_tables_sql_db first!
     
+    # Example Input: "table1, table2, table3"
+    # """
+    description = """
+    Input to this tool is a comma-separated list of tables, output is the schema for those tables.
+    
+    If you need to use JOIN statement or don't know about word '코드' in user question, Refer to the output of the 'schema_sql_db'.
+
     Example Input: "table1, table2, table3"
+
+    [Output's Structure start]
+
+    (Column Name,Data Type,Max Length)
+    [(column name, type name, length), ...]
+
+    (Column's description in Table name)
+    column name 1: code A:code A's mean, code B:code B's mean, ...
+    개인구분고객구분코드: 2:유망, 1:소관, 8:기타(MIG), ...
+    column name 3: code C:code C's mean, code D:code D's mean, ...
+    보험료납입상태코드: E:AM지점장, G:PFPGA, 1:도입, ...
+
+    [END]
+
+    Be sure that the tables actually exist by calling list_tables_sql_db first!
     """
 
     def _run(self, table_names: str) -> str:
         """Get the schema for tables in a comma-separated list."""
         return self.db.get_table_info_no_throw(table_names.split(", "))
-    # def _run(self, table_names: str) -> str:
-    #     """Get the schema for tables in a double-hash separated list."""
-    #     # breakpoint()
-    #     return self.db.get_table_info_no_throw(table_names.split(", "))
-
 
     async def _arun(self, table_name: str) -> str:
         raise NotImplementedError("SchemaSqlDbTool does not support async")
 
 
 class ListSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
-    """Tool for getting tables names."""
+    # """Tool for getting tables names."""
 
-    name = "list_tables_sql_db"
-    description = "Input is an empty string, output is a comma separated list of tables and list in the database."
-    # description = "Input is an empty string, output is double-hash separated list of tables and list of each table's description in the database."
+    # name = "list_tables_sql_db"
+    # description = "Input is an empty string, output is a comma separated list of tables and list in the database."
 
-    desc_query = '''
-        SELECT B.name, cast(A.value as nvarchar(200)) as description
-        FROM  SYS.extended_properties A 
-        LEFT OUTER JOIN SYSOBJECTS B 
-            ON A.major_id = B.id 
-        WHERE B.name = '{}'
-        '''
+    # def _run(self, tool_input: str = "") -> str:
+    #     """Get the schema for a specific table."""
+    #     return ", ".join(self.db.get_usable_table_names())
+
+    # async def _arun(self, tool_input: str = "") -> str:
+    #     raise NotImplementedError("ListTablesSqlDbTool does not support async")
     
-    # TABLE_SELECTOR = """
-    # {query}
-    # Double check the {dialect} query above for common mistakes, including:
-    # - Using BETWEEN for exclusive ranges
-    # - Data type mismatch in predicates
-    # - Properly quoting identifiers
-    # - Using the correct number of arguments for functions
-    # - Using the JOIN syntax for finding proper columns
 
-    # If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query."""
+    '''
+    23.09.27
+    추후 테이블 수가 늘어나면서 긴 입력값으로 인한 token length 에러가 일어날 것으로 예상
+    이를 대비하기 위해 테이블 선별 기능 추가
+    1) 모든 테이블 리스트를 입력 받는다
+    2) 테이블 선별을 위한 프롬프트 준비 및 필요 데이터 추출
+    3) llm(ChatOpenAI)을 활용하여 프롬프트 입력 후 추론 값 반환 => QueryCheckerTool 참고
+    4) 이전 list_tables_sql_db 의 output 과 같이 사용자 질의를 해결하기 위해 선별된 테이블을 리스트로 반환
 
-    # description = """
-    # {table_desc}
-    # These are double-hash separated list of tables and list of each table's description.
+    테이블에 대한 간단한 요약(keyword) 방식이나 자세한 정보(full-text)를 같이 제공함으로써 GPT의 성능을 올려보는 시도도 필요
+    혹은 사용자가 설정하는 옵션으로 만들어 보는 것도 고려해봄직하다.
+    '''
+    name = 'list_tables_sql_db'
+    description = """
+    Input is an empty string, output is a comma separated list of extracted some tables associated with user questions.
 
-    # The description of each table is organized as follows.
-    # Table_Name:Table_Description // Tables that refers to the Table_Name
-    # Example Input) "플랜내역:단체고객에 대한 데이터를 관리하는 테이블 // 조직월기본, 단체고객기본 ##Table_Name2:Table_Description2 // Referred Table2 ##Table_Name3 ..."
+    Use this tool to select the proper table to use for user's question.
+    """
 
-    # Select proper tables to answer user's question based on the Table_Name and the description of each table.
+    llm_chain: LLMChain = Field(
+        default_factory=lambda: LLMChain(
+            llm=ChatOpenAI(temperature=0, engine=os.getenv('DEPLOYMENT_NAME')),
+            prompt=PromptTemplate(
+                template=TABLE_SELECTOR, input_variables=["question", "table_desc"]
+            ),
+        )
+    ) 
 
-    # output is the schema and sample rows for those tables.
-    # Be sure that the tables actually exist by calling list_tables_sql_db first!
-    # """    
-
+    def __init__(self, db, callback_manager, question:str = ''):
+        super().__init__(db=db, callback_manager=callback_manager)
+        self.question = question
 
     def _run(self, tool_input: str = "") -> str:
-        """Get the schema for a specific table."""
-        return ", ".join(self.db.get_usable_table_names())
-
-    # def _run(self, tool_input: str = ""):
-    #     """Get the schema for a specific table and each table's desc"""
-    #     table_names = self.db.get_usable_table_names()
-    #     table_descs = []
-
-    #     for name in table_names:
-    #         table_desc = self.db._engine.execute(
-    #             self.desc_query.format(name[4:])    # 'dbo.' -> 이 부분 제거하려고 슬라이싱
-    #             ).fetchall()[0][1]
-            
-    #         if table_desc is None:
-    #             # raise print(f"The Table {name}'s description is None")
-    #             print(f"The Table {name}'s description is Empty.")
-    #             pass
-
-    #         else:
-    #             table_descs.append([name, table_desc])
-        
-    #     return "// ".join([":".join(table_des) for table_des in table_descs])
-        # return 'name1:desc1, name2:desc2, ...' 와 같은 str type 데이터로 변환
-
+        """Get the selected table list for correct answers."""
+        table_list = self.db.get_usable_table_names()   # [dbo.table_name, ...]
+        table_desc = self.db.get_table_desc(table_list)
+      
+        selected_tables = self.llm_chain.predict(question=self.question, table_desc=table_desc)
+        ## 아마 selected_tables 은 리스트가 아닌 string 일 것이다. 바로 return 해도 되지만 리스트의 대괄호([])를 지우기 위해
+        ## 우선 print문을 통해 값을 확인 후 리스트로 변환해줘야 한다.
+        breakpoint()
+        # return ", ".join(selected_tables)
+        return selected_tables
 
     async def _arun(self, tool_input: str = "") -> str:
         raise NotImplementedError("ListTablesSqlDbTool does not support async")
@@ -661,19 +764,16 @@ class SQLDatabaseToolkit(BaseToolkit):
 
         arbitrary_types_allowed = True
 
-    def get_tools(self) -> List[BaseTool]:
+    # def get_tools(self) -> List[BaseTool]:
+    def get_tools(self, question) -> List[BaseTool]:
         """Get the tools in the toolkit."""
         return [
             QuerySQLDataBaseTool(db=self.db, callback_manager=self.callback_manager),
             InfoSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
-            ListSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
+            ListSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager, question=question),
+            # ListSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
             QueryCheckerTool(db=self.db, callback_manager=self.callback_manager),
         ]
-
-
-def get_desc_from_table(table_name:str):
-    table_name
-    pass
 
 
 def create_prompt(
@@ -710,7 +810,8 @@ def create_sql_agent(
     **kwargs: Any,
 ) -> AgentExecutor:
     """Construct a sql agent from an LLM and tools."""
-    tools = toolkit.get_tools()
+    # tools = toolkit.get_tools()
+    tools = toolkit.get_tools(kwargs['question'])
     toolkit_names = list(map(lambda x: x.name, tools))
 
     prefix = prefix.format(dialect=toolkit.dialect, top_k=top_k)
