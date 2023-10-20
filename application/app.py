@@ -76,12 +76,8 @@ def api_answer():
     # topK=data['topK']
     print('-' * 5)
     os.environ['OPENAI_API_BASE']= get_value(data['openai_base'], "OPENAI_API_BASE")
-    # llm=AzureOpenAI(temperature=0,
-    #                 openai_api_key = get_value(data['openai_key'], "OPENAI_API_KEY"),
-    #                 deployment_name=get_value(data['openai_deployment'], "DEPLOYMENT_NAME"),
-    #                 max_retries=2)
+
     llm = ChatOpenAI(temperature=0,
-                    #  openai_api_key=OPENAI_API_KEY,
                      model_name=get_value(data['openai_deployment'], "DEPLOYMENT_NAME"),
                      engine=get_value(data['openai_deployment'], "DEPLOYMENT_NAME"))
   
@@ -92,7 +88,7 @@ def api_answer():
                                     Database=get_value(data['database'], 'AZURE_SQL_DATABASE'), 
                                     Username=get_value(data['username'], 'AZURE_SQL_USERNAME'), 
                                     Password=get_value(data['password'], 'AZURE_SQL_PASSWORD'), 
-                                    topK=os.getenv('TOP_K'),
+                                    topK=15,
                                     question=question
                                     )
 
@@ -100,6 +96,7 @@ def api_answer():
     try:
 
         answer, thought = sql_agent.run(question)
+        # answer = answer[answer.index('SELECT'):]    # 쿼리문 외의 쓸데없는 문자열은 제거
         # print(thought)
 
         return {'answer':answer, 'thought': thought}
