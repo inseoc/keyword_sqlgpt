@@ -36,28 +36,56 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.schema import CreateTable
 
-SQL_PREFIX = """You are an agent designed to interact with a Microsoft Azure SQL database.
-        Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
+# SQL_PREFIX = """You are an agent designed to interact with a Microsoft Azure SQL database.
+#         Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
+#         Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results using SELECT TOP in SQL Server syntax.
+#         You can order the results by a relevant column to return the most interesting examples in the database.
+#         Never query for all the columns from a specific table, only ask for a the few relevant columns given the question.
+#         You have access to tools for interacting with the database.
+#         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
+#         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
+        
+#         If you encounter "Invalid column name" error in Observation, Use "JOIN" statement and Find proper column name.
+
+#         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+
+#         If the question does not seem related to the database, just return "I don't know" as the answer.
+#         """
+SQL_PREFIX = """
+        You are an agent designed to interact with a Microsoft Azure SQL database.
+        Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query.
+        Return the Query statement and Never return the result of the query statement.
+
         Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results using SELECT TOP in SQL Server syntax.
         You can order the results by a relevant column to return the most interesting examples in the database.
         Never query for all the columns from a specific table, only ask for a the few relevant columns given the question.
         You have access to tools for interacting with the database.
         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
-        
-        If you encounter "Invalid column name" error in Observation, Use 'JOIN' statement and Find proper column name.
-        If you constantly encounter "Invalid column name" error in Observation, Use 'list_tables_sql_db' tool again.
 
         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+        
+        Use columns in SELECT statement of KEY_QUERY on the below if you generate the query.
+        The keywords are organized as follows.
 
-        If the question does not seem related to the database, just return "I don't know" as the answer.
+        [keyword name:keywords query]
+
+        If you encounter keyword, You MUST create a query statement mixes the query of the keyword and use all the SELECT columns in the query of the keyword!
+
+        If there are more than two query statements appearing in Fianl Answer, MERGE and JOIN them neatly into one query statement.
+        
+        If '별' in Question, USE JOIN statement with '조직월기본' or '조직원월기본'.
+
+        If the question does not seem related to the database, just return string "None" as the answer.
+        If Observation value is not None, Don't return 'None' in Final Answer!
         """
-
+#  with '조직월기본' or '조직원월기본'.
 SQL_SUFFIX = """Begin!
 
 Question: {input}
-Thought: I should look at the tables in the database to see what I can query.
+Thought: I should look at the keywords in Question and see what I can query.
 {agent_scratchpad}"""
+
 
 
 QUERY_CHECKER = """
@@ -67,49 +95,12 @@ Double check the {dialect} query above for common mistakes, including:
 - Data type mismatch in predicates
 - Properly quoting identifiers
 - Using the correct number of arguments for functions
-- Using the JOIN syntax for finding proper columns
+- When use JOIN syntax, you should use PK columns of each table.
 
-If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query."""
+If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query.
+If you can't not find any error in query, return the query statement.
+"""
 
-
-TABLE_SELECTOR = '''
-[QUESTION]
-{question}
-
-When a user asks the 'QUESTION' above, look at the DB table name and the table description below to decide which table to use.
-You can use more than one table.
-
-The OUTPUT is the table name to be used and the data format must be 'str'.
-
-Look at an example of the form of input and output and reflect them to return the OUTPUT for the INPUT.
-
-Examples of input:
-[Table name 1: Table description 1]
-[Table name 2: Table description 2]
-[Table name 3: Table description 3]
-
-Example output:
-"Table name 2, table name 3."
-
-INPUT:
-{table_desc}
-
-OUTPUT:
-'''
-
-# QUERY_CHECKER = """
-# {query}
-# Double check the {dialect} query above for common mistakes, including:
-# - Using NOT IN with NULL values
-# - Using UNION when UNION ALL should have been used
-# - Using BETWEEN for exclusive ranges
-# - Data type mismatch in predicates
-# - Properly quoting identifiers
-# - Using the correct number of arguments for functions
-# - Casting to the correct data type
-# - Using the proper columns for joins
-
-# If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query."""
 
 def _format_index(index: dict) -> str:
     return (
@@ -202,14 +193,6 @@ class SQLDatabase:
                 if table in intersection
             )
 
-        # self._metadata = metadata or MetaData()
-        # # including view support if view_support = true
-        # self._metadata.reflect(
-        #     views=view_support,
-        #     bind=self._engine,
-        #     # only=self._usable_tables,
-        #     # schema=self._schema,
-        # )
 
     @classmethod
     def from_uri(
@@ -230,12 +213,6 @@ class SQLDatabase:
             return self._include_tables
         return self._all_tables - self._ignore_tables
 
-    # def get_table_names(self) -> Iterable[str]:
-    #     """Get names of tables available."""
-    #     warnings.warn(
-    #         "This method is deprecated - please use `get_usable_table_names`."
-    #     )
-    #     return self.get_usable_table_names()
 
     @property
     def table_info(self) -> str:
@@ -252,17 +229,19 @@ class SQLDatabase:
         appended to each table description. This can increase performance as
         demonstrated in the paper.
         """
-        all_table_names = self.get_usable_table_names()
-        if table_names is not None:
-            missing_tables = set(table_names).difference(all_table_names)
-            if missing_tables:
-                raise ValueError(f"table_names {missing_tables} not found in database")
-            all_table_names = table_names
+        # all_table_names = self.get_usable_table_names()
+        # if table_names is not None:
+        #     missing_tables = set(table_names).difference(all_table_names)
+        #     if missing_tables:
+        #         raise ValueError(f"table_names {missing_tables} not found in database")
+        #     all_table_names = table_names
 
-        meta_tables = [tbl for tbl  in set(all_table_names)]
+        # meta_tables = [tbl for tbl  in set(all_table_names)]
 
         tables = []
-        for table in meta_tables:
+        # for table in meta_tables:
+        for table in table_names:
+
             if self._custom_table_info and table.name in self._custom_table_info:
                 tables.append(self._custom_table_info[table.name])
                 continue
@@ -272,15 +251,7 @@ class SQLDatabase:
             if len(table_name) == 2:
                 schema = table_name[0]
                 table_name = table_name[1]
-            # metadata_obj = MetaData(schema=schema)
-            # metadata_obj.reflect(bind=self._engine, only=[table_name])
-            # create_table = str(CreateTable(metadata_obj.tables[table]).compile(self._engine))
-            # table_info = f"{create_table.rstrip()}"
-            # has_extra_info = (
-            #     self._indexes_in_table_info or self._sample_rows_in_table_info
-            # )
-            # if has_extra_info:
-            #     table_info += "\n\n/*"
+
 
             # 1. 한 테이블에 대한 모든 컬럼명, 데이터타입, max-length 를 조회하는 쿼리
             get_table_info_query = f"""
@@ -293,105 +264,37 @@ class SQLDatabase:
             columns = self.run_no_throw(get_table_info_query)   # 참고로 columns 의 type은 str 이다.
             table_info += "(Column Name,Data Type,Max Length)\n" 
             table_info += str(columns)
-            # col_list = ast.literal_eval(columns)
-            # for col in col_list:
-            #     table_info += f"{col[0]}\t{col[1]}\t{col[2]}\n"
-            # table_info += ")\n"
 
-            # 2. 각 컬럼에 대한 설명을 조회하는 쿼리 // 23.09.26
-            columns = re.sub(r'\[\]', '', columns)  # 양쪽 대괄호 제거
-            columns = re.findall(r"\('(.*?)', '(.*?)', (\d+)\)", columns)   # [(Column Name,Data Type,Max Length)] 형식의 리스트로 변환
-            table_info += f"\n(Column's description in {table}):\n"
-            col_names = list(map(lambda x: x[0], columns))
-            
-            for col_name in col_names:
-                get_col_desc_query = f"""
-                SELECT cast(VALUE as nvarchar(100)) as column_description 
-                FROM ::FN_LISTEXTENDEDPROPERTY(NULL, 'SCHEMA', 'dbo', 'TABLE', '{table[4:]}', 'COLUMN', '{col_name}')
-                """
-                
-                col_desc = self.run_no_throw(get_col_desc_query)
-                
-                if col_desc != '[]':
-                    col_desc = re.sub(r'[\'\(\)\[\]]', '', col_desc)[:-1]
-                    table_info += f"{col_name} description: {col_desc}\n"
-
-            # 3. 외래 키를 조회하는 쿼리
-            get_table_fk_query = f"""
-            SELECT fk.name AS NameOfForeignKey
-                ,t.name AS FKTableName
-                , pc.name AS FKColumn
-                , rt.name AS ReferencedTable
-                , c.name AS ReferencedColumn
-                FROM sys.foreign_key_columns AS fkc
-                INNER JOIN sys.foreign_keys AS fk ON fkc.constraint_object_id = fk.object_id
-                INNER JOIN sys.tables AS t ON fkc.parent_object_id = t.object_id
-                INNER JOIN sys.tables AS rt ON fkc.referenced_object_id = rt.object_id
-                INNER JOIN sys.columns AS pc ON fkc.parent_object_id = pc.object_id
-                AND fkc.parent_column_id = pc.column_id
-                INNER JOIN sys.columns AS c ON fkc.referenced_object_id = c.object_id
-                AND fkc.referenced_column_id = c.column_id
-                where t.object_id=object_id('{table}')
+            # 2. 주요 & 외래키를 조회하는 쿼리
+            get_table_pk_fk_query = f"""
+            SELECT COLUMN_NAME, CONSTRAINT_NAME 
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
+            WHERE TABLE_NAME = '{table_name}'
             """
-            fk_info = self.run_no_throw(get_table_fk_query)
-            if fk_info != '[]':
-                table_info += f"Foreign Key Info: {fk_info}\n"
+            pk_fk_info = eval(self.run_no_throw(get_table_pk_fk_query))
+            org_info = f"\nPrimary Key & Foreign Key Info in {table_name}:\n"
+
+            if pk_fk_info != []:
+
+                pk_fk_info = list(map(lambda x: (x[0], x[1][2:]), pk_fk_info))
+
+                org_info += f'{pk_fk_info}' + "\n"
             
-            # 4. sample row 를 일정 개수만큼만 추출 / default : _sample_rows_in_table_info = 2
+            table_info += org_info
+            
+            # 3. sample row 를 일정 개수만큼만 추출 / default : _sample_rows_in_table_info = 2
             if self._sample_rows_in_table_info:
                 get_sample_rows_query = f"""
                 SELECT TOP {self._sample_rows_in_table_info} *
                 FROM {table}"""
                 sample_rows = self.run_no_throw(get_sample_rows_query)
                 table_info += f"\nSample Rows:\n{sample_rows}\n"
+
             tables.append(table_info)
+
         final_str = "\n\n".join(tables)
+        
         return final_str
-    
-
-    def get_table_desc(self, table_names: Optional[List[str]] = None) -> str:
-
-        all_table_names = self.get_usable_table_names()
-
-        if table_names is not None:
-            missing_tables = set(table_names).difference(all_table_names)
-            if missing_tables:
-                raise ValueError(f"table_names {missing_tables} not found in database")
-            all_table_names = table_names
-
-        meta_tables = [tbl for tbl  in set(all_table_names)]
-        table_info = ''
-        for table in meta_tables:
-
-            # add create table command
-            table_name = table.split('.')
-
-            if len(table_name) == 2:
-                table_name = table_name[1] 
-
-            get_table_desc_query = f"""
-                SELECT cast(A.value as nvarchar(200)) as description
-                FROM  SYS.extended_properties A 
-                    LEFT OUTER JOIN SYSOBJECTS B 
-                    ON A.major_id = B.id
-                WHERE B.name = '{table_name}'
-                AND A.minor_id = '0'
-                """
-
-            tab_desc = self.run_no_throw(get_table_desc_query)
-
-            if tab_desc != '[]':
-                tab_desc = re.sub(r'[\'\(\)\[\]]', '', tab_desc)[:-1]
-            
-            else:
-                raise print(f"{table}'s description data is None. Insert some data.")
-
-            table_info += f"[{table} : {str(tab_desc)}]\n"
-
-        breakpoint()
-
-        return table_info
-
 
     def _get_table_indexes(self, table: Table) -> str:
         indexes = self._inspector.get_indexes(table.name)
@@ -573,8 +476,6 @@ class HtmlCallbackHandler (BaseCallbackHandler):
         """Do nothing."""
         pass
 
-
-# 밑 코드부터는 Custom tools 가 등장하는데, description 에서는 how/when/why 가 명확하게 들어가야 한다.
 class BaseSQLDatabaseTool(BaseModel):
     """Base tool for interacting with a SQL database."""
 
@@ -593,10 +494,15 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
     """Tool for querying a SQL database."""
 
     name = "query_sql_db"
+    # description = """
+    # Input to this tool is a detailed and correct SQL query, output is a result from the database.
+    # If the query is not correct, an error message will be returned. 
+    # If an error is returned, rewrite the query, check the query, and try again or use keyword_query_sql_db again.
+    # """
     description = """
-    Input to this tool is a detailed and correct SQL query, output is a result from the database.
+    Input to this tool is a detailed and correct SQL query, output is the Query Statement with correct answers.
     If the query is not correct, an error message will be returned. 
-    If an error is returned, rewrite the query, check the query, and try again.
+    If an error is returned, rewrite the query, check the query, and try again or use keyword_query_sql_db again.
     """
 
     def _run(self, query: str) -> str:
@@ -611,34 +517,36 @@ class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
     """Tool for getting metadata about a SQL database.(a comma-separated)"""
 
     name = "schema_sql_db"
+    description = """
+    Input to this tool is a comma-separated list of tables, output is the schema and sample rows for those tables.
+    You can know all things about table. For example Table names, Columns in each table, PK & FK info etc.
+    Be sure that the tables actually exist by calling list_tables_sql_db first!
+    
+    Example Input: "table1, table2, table3"
+    """
     # description = """
-    # Input to this tool is a comma-separated list of tables, output is the schema and sample rows for those tables.
+    # Input to this tool is a comma-separated list of tables, output is the schema for those tables.
+    
+    # If you need to use JOIN statement or don't know about word '코드' in user question, Refer to the output of the 'schema_sql_db'.
+    # You can know all things about table!
+
+    # [Output's Structure start]
+
+    # (Column Name,Data Type,Max Length)
+    # [(column name, type name, length), ...]
+
+    # (Column's description in Table name)
+    # column name 1: code A:code A's mean, code B:code B's mean, ...
+    # 개인구분고객구분코드: 2:유망, 1:소관, 8:기타(MIG), ...
+    # column name 3: code C:code C's mean, code D:code D's mean, ...
+    # 보험료납입상태코드: E:AM지점장, G:PFPGA, 1:도입, ...
+
+    # [END]
+
     # Be sure that the tables actually exist by calling list_tables_sql_db first!
     
     # Example Input: "table1, table2, table3"
     # """
-    description = """
-    Input to this tool is a comma-separated list of tables, output is the schema for those tables.
-    
-    If you need to use JOIN statement or don't know about word '코드' in user question, Refer to the output of the 'schema_sql_db'.
-
-    Example Input: "table1, table2, table3"
-
-    [Output's Structure start]
-
-    (Column Name,Data Type,Max Length)
-    [(column name, type name, length), ...]
-
-    (Column's description in Table name)
-    column name 1: code A:code A's mean, code B:code B's mean, ...
-    개인구분고객구분코드: 2:유망, 1:소관, 8:기타(MIG), ...
-    column name 3: code C:code C's mean, code D:code D's mean, ...
-    보험료납입상태코드: E:AM지점장, G:PFPGA, 1:도입, ...
-
-    [END]
-
-    Be sure that the tables actually exist by calling list_tables_sql_db first!
-    """
 
     def _run(self, table_names: str) -> str:
         """Get the schema for tables in a comma-separated list."""
@@ -649,62 +557,14 @@ class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
 
 
 class ListSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
-    # """Tool for getting tables names."""
+    """Tool for getting tables names."""
 
-    # name = "list_tables_sql_db"
-    # description = "Input is an empty string, output is a comma separated list of tables and list in the database."
-
-    # def _run(self, tool_input: str = "") -> str:
-    #     """Get the schema for a specific table."""
-    #     return ", ".join(self.db.get_usable_table_names())
-
-    # async def _arun(self, tool_input: str = "") -> str:
-    #     raise NotImplementedError("ListTablesSqlDbTool does not support async")
-    
-
-    '''
-    23.09.27
-    추후 테이블 수가 늘어나면서 긴 입력값으로 인한 token length 에러가 일어날 것으로 예상
-    이를 대비하기 위해 테이블 선별 기능 추가
-    1) 모든 테이블 리스트를 입력 받는다
-    2) 테이블 선별을 위한 프롬프트 준비 및 필요 데이터 추출
-    3) llm(ChatOpenAI)을 활용하여 프롬프트 입력 후 추론 값 반환 => QueryCheckerTool 참고
-    4) 이전 list_tables_sql_db 의 output 과 같이 사용자 질의를 해결하기 위해 선별된 테이블을 리스트로 반환
-
-    테이블에 대한 간단한 요약(keyword) 방식이나 자세한 정보(full-text)를 같이 제공함으로써 GPT의 성능을 올려보는 시도도 필요
-    혹은 사용자가 설정하는 옵션으로 만들어 보는 것도 고려해봄직하다.
-    '''
-    name = 'list_tables_sql_db'
-    description = """
-    Input is an empty string, output is a comma separated list of extracted some tables associated with user questions.
-
-    Use this tool to select the proper table to use for user's question.
-    """
-
-    llm_chain: LLMChain = Field(
-        default_factory=lambda: LLMChain(
-            llm=ChatOpenAI(temperature=0, engine=os.getenv('DEPLOYMENT_NAME')),
-            prompt=PromptTemplate(
-                template=TABLE_SELECTOR, input_variables=["question", "table_desc"]
-            ),
-        )
-    ) 
-
-    def __init__(self, db, callback_manager, question:str = ''):
-        super().__init__(db=db, callback_manager=callback_manager)
-        self.question = question
+    name = "list_tables_sql_db"
+    description = "Input is an empty string, output is a comma separated list of tables and list in the database."
 
     def _run(self, tool_input: str = "") -> str:
-        """Get the selected table list for correct answers."""
-        table_list = self.db.get_usable_table_names()   # [dbo.table_name, ...]
-        table_desc = self.db.get_table_desc(table_list)
-      
-        selected_tables = self.llm_chain.predict(question=self.question, table_desc=table_desc)
-        ## 아마 selected_tables 은 리스트가 아닌 string 일 것이다. 바로 return 해도 되지만 리스트의 대괄호([])를 지우기 위해
-        ## 우선 print문을 통해 값을 확인 후 리스트로 변환해줘야 한다.
-        breakpoint()
-        # return ", ".join(selected_tables)
-        return selected_tables
+        """Get the schema for a specific table."""
+        return ", ".join(self.db.get_usable_table_names())
 
     async def _arun(self, tool_input: str = "") -> str:
         raise NotImplementedError("ListTablesSqlDbTool does not support async")
@@ -713,6 +573,13 @@ class ListSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
 class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
     """Use an LLM to check if a query is correct.
     Adapted from https://www.patterns.app/blog/2023/01/18/crunchbot-sql-analyst-gpt/"""
+
+    name = "query_checker_sql_db"
+    description = """
+    Input is a query, output is a neatly and clearly aligned query.
+    Be sure that use this tool by calling query_sql_db first!
+    """
+
     # print(os.getenv('OPENAI_API_KEY'), type(os.getenv('OPENAI_API_KEY')))
     template: str = QUERY_CHECKER
     llm_chain: LLMChain = Field(
@@ -724,11 +591,6 @@ class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
             ),
         )
     )
-    name = "query_checker_sql_db"
-    description = """
-    Use this tool to double check if your query is correct before executing it.
-    Always use this tool before executing a query with query_sql_db!
-    """
 
     @validator("llm_chain")
     def validate_llm_chain_input_variables(cls, llm_chain: LLMChain) -> LLMChain:
@@ -748,6 +610,139 @@ class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
 
 
 
+class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
+    """Use an LLM to generate query using keyword informations."""
+
+    name = "keyword_query_sql_db"
+    description = """
+    Input is an empty string, output is the Information for generating query that match user's question.
+    Run this tool before query_sql_db!
+
+    USE Keyword's query and columns in the queries when generate query.
+    """
+
+    # def __init__(self, db: SQLDatabase = Field(exclude=True), callback_manager: Optional[BaseCallbackManager] = None, question: str = ''):
+    #     from datetime import datetime
+
+    #     self.question = question
+    #     self.db = db
+    #     self.callback_manager = callback_manager
+
+    #     date = datetime.today()
+    #     self.today = str(date.year)+str(date.month)  # YYYYMM 형식의 현재 날짜
+
+    #     if '별' in self.question:    # '별'에 따른 별도 키워드 동작을 위한 하드 코딩
+    #         self.flag = True
+    #         special_idx = question.index('별')
+    #         self._question = question[:special_idx]
+    db: SQLDatabase = Field(exclude=True)
+    callback_manager: Optional[BaseCallbackManager] = None
+    question: str = ''
+
+    def _run(self, input: str = "") -> str:
+        """Use the LLM to check the query."""
+        from datetime import datetime
+        date = datetime.today()
+        today = str(date.year)+str(date.month)  # YYYYMM 형식의 현재 날짜
+
+        flag = False
+        if '별' in self.question:    # '별'에 따른 별도 키워드 동작을 위한 하드 코딩
+            flag = True
+            special_idx = self.question.index('별')
+            _question = self.question[:special_idx] 
+
+        ### 1.입력 문장(유저 질문)으로부터 키워드 추출 // 하드 코딩 해결 필요
+        standard_queires = self.db.run_no_throw("SELECT 유사어,매핑쿼리 FROM dbo.표준계수정의")
+        standard_queires_list = eval(standard_queires)
+        self.question = self.question.replace(' ', '')
+        return_keyword = []
+
+        keyword_info = "Keyword's query:\n"
+
+        for item in standard_queires_list:
+            similar_word = item[0].split(', ')            
+
+            for word in similar_word:
+                if word in self.question:
+                    return_keyword.append(word) # 추출한 키워드를 리스트 변수(return_keyword)에 적재
+     
+        ### 2.추출한 키워드로 매핑쿼리, 테이블 추출
+        keywords = []
+        results = eval(self.db.run_no_throw("SELECT 키워드, 유사어 FROM dbo.표준계수정의"))
+        if type(results) != list:
+            raise TypeError("results is not list type. Please check output values")
+        
+        for rk in return_keyword:
+            for keyword, v in results:
+
+                values = v.replace(' ', '').split(',')
+
+                if rk in values:
+                    keywords.append(keyword)
+                    break
+        
+        keyword_values = []
+        for keyword in keywords:
+            keyword_value = eval(self.db.run_no_throw(f'''
+                                                      SELECT 매핑테이블, 매핑쿼리 
+                                                      FROM dbo.표준계수정의
+                                                      WHERE 키워드 = '{keyword}'
+                                                      '''))
+            keyword_values.append(keyword_value)    # 각 키워드에 해당하는 테이블 & 쿼리 획득(이중 리스트)
+            keyword_info += f"{keyword}:{keyword_value[0][1]}\n"
+     
+        ### 3. '별'에 따른 조직원, 조직월기본 테이블 선정 후 문자열 보관 // 하드 코딩 해결 필요
+        special_keyword = {'dbo.조직월기본':
+                                ['사업부', '본부', '지원단', '지점', '영업소', '조직'], 
+                           'dbo.조직원월기본':
+                                ['사원', 'FP', '조직원']}
+        if flag:
+            for table_name, special_word in special_keyword.items():
+
+                if table_name == 'dbo.조직월기본':
+                    for sw in special_word:
+
+                        if sw in _question:
+                            _table_name = table_name[4:]
+                            org_query = f"SELECT {sw}코드, {sw}명, 기준년월 FROM {table_name} WHERE 기준년월 = 'YYYYMM'"
+                            keyword_table = table_name
+                            break
+                else:
+
+                    for sw in special_word:
+
+                        if sw in _question:
+                            _table_name = table_name[4:]
+                            org_query = f"SELECT 조직원번호, 조직원명, 기준년월 FROM {table_name} WHERE 기준년월 = 'YYYYMM'"
+                            keyword_table = table_name    
+                            break
+            
+            keyword_table_list = list(set(list(map(lambda x: x[0][0], keyword_values)))) + [keyword_table]
+            keyword_info += f"{_table_name}:{org_query}\n"
+
+        else:
+            keyword_table_list = list(set(list(map(lambda x: x[0][0], keyword_values))))
+
+        ### 4. (1)키워드의 매핑쿼리, (2)매핑테이블 및 조직 테이블의 스키마 정보(테이블이름, 컬럼명, 주요-외래키)
+        keyword_desc = self.db.get_table_info(keyword_table_list)
+        keyword_info += f"\n{keyword_desc}"
+        today = str(202309)
+        keyword_info = keyword_info.replace("YYYYMM", today)
+
+        ### 5. 쿼리 생산을 위한 쿼리용LLM
+        pass
+
+
+        return keyword_info
+    
+
+    async def _arun(self, input: str = "") -> str:
+        raise NotImplementedError("KeywordQueryTool does not support async")
+
+
+
+
+
 class SQLDatabaseToolkit(BaseToolkit):
     """Toolkit for interacting with SQL databases."""
 
@@ -764,15 +759,14 @@ class SQLDatabaseToolkit(BaseToolkit):
 
         arbitrary_types_allowed = True
 
-    # def get_tools(self) -> List[BaseTool]:
-    def get_tools(self, question) -> List[BaseTool]:
+    def get_tools(self, question='') -> List[BaseTool]:
         """Get the tools in the toolkit."""
         return [
-            QuerySQLDataBaseTool(db=self.db, callback_manager=self.callback_manager),
-            InfoSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
-            ListSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager, question=question),
-            # ListSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
-            QueryCheckerTool(db=self.db, callback_manager=self.callback_manager),
+           KeywordQueryTool(db=self.db, callback_manager=self.callback_manager, question=question),
+           QuerySQLDataBaseTool(db=self.db, callback_manager=self.callback_manager),
+       #     InfoSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
+        #    ListSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
+           QueryCheckerTool(db=self.db, callback_manager=self.callback_manager),
         ]
 
 
@@ -782,9 +776,11 @@ def create_prompt(
         suffix: str = SQL_SUFFIX,
         format_instructions: str = FORMAT_INSTRUCTIONS,
         input_variables: Optional[List[str]] = None,
+        # standard_queires: str = ""
     ):
 
     tool_strings = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
+    # prefix.replace("!sampleQueries!",standard_queires )
     tool_names = ", ".join([tool.name for tool in tools])
     format_instructions = FORMAT_INSTRUCTIONS.format(tool_names=tool_names)
     template = "\n\n".join([prefix, tool_strings, format_instructions, suffix])
@@ -807,14 +803,15 @@ def create_sql_agent(
     max_iterations: Optional[int] = 15,
     early_stopping_method: str = "force",
     verbose: bool = False,
-    **kwargs: Any,
+    question: str="",
+    **kwargs: Any
 ) -> AgentExecutor:
     """Construct a sql agent from an LLM and tools."""
-    # tools = toolkit.get_tools()
-    tools = toolkit.get_tools(kwargs['question'])
+    tools = toolkit.get_tools(question)
     toolkit_names = list(map(lambda x: x.name, tools))
 
     prefix = prefix.format(dialect=toolkit.dialect, top_k=top_k)
+    # standard_queires = get_standard_queires(toolkit,question)
 
     '''
     23.09.21 환경구축 및 코드 분석 후 개발
@@ -826,7 +823,7 @@ def create_sql_agent(
         prefix=prefix,
         suffix=suffix,
         format_instructions=format_instructions,
-        input_variables=input_variables,
+        # standard_queires= standard_queires
     )
 
     llm_chain = LLMChain(
@@ -846,3 +843,19 @@ def create_sql_agent(
         early_stopping_method=early_stopping_method,
         callback_manager=callback_manager
     )
+
+
+# def get_standard_queires(toolkit: SQLDatabaseToolkit,question:str ):
+#     standard_queires =  toolkit.db.run_no_throw("SELECT 유사어,매핑쿼리 FROM dbo.표준계수정의")
+#     standard_queires_list = eval(standard_queires)
+ 
+#     return_query = ""
+
+#     for item in standard_queires_list:
+#         similar_word = item[0].split(',')            
+
+#         for word in similar_word:
+#             if word in question:
+#                 return_query += "sampleQueries:" + item[1] + "\n\n " 
+                
+#     return return_query
