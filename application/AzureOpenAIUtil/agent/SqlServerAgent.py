@@ -1,7 +1,7 @@
 """SQL agent."""
 from __future__ import annotations
 from typing import Any, List, Optional, Sequence
-import ast
+# import ast
 import re
 
 from langchain.agents.agent import AgentExecutor
@@ -12,13 +12,13 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain.chains.llm import LLMChain
 from langchain.llms.base import BaseLLM
 # from langchain.sql_database import SQLDatabase
-from langchain.input import print_text
+# from langchain.input import print_text
 from langchain.schema import AgentAction, AgentFinish, LLMResult
 from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Extra, Field, validator
 import os
 from langchain.chains.llm import LLMChain
-from langchain.llms.openai import AzureOpenAI
+# from langchain.llms.openai import AzureOpenAI
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.tools.base import BaseTool
@@ -28,58 +28,100 @@ from langchain.agents.agent_toolkits.base import BaseToolkit
 """SQLAlchemy wrapper around a database."""
 
 
-import warnings
+# import warnings
 from typing import Any, Iterable, List, Optional
 
 from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.schema import CreateTable
+# from sqlalchemy.schema import CreateTable
 
-# SQL_PREFIX = """You are an agent designed to interact with a Microsoft Azure SQL database.
-#         Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
-#         Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results using SELECT TOP in SQL Server syntax.
-#         You can order the results by a relevant column to return the most interesting examples in the database.
-#         Never query for all the columns from a specific table, only ask for a the few relevant columns given the question.
-#         You have access to tools for interacting with the database.
-#         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
-#         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
-        
-#         If you encounter "Invalid column name" error in Observation, Use "JOIN" statement and Find proper column name.
-
-#         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
-
-#         If the question does not seem related to the database, just return "I don't know" as the answer.
-#         """
 SQL_PREFIX = """
         You are an agent designed to interact with a Microsoft Azure SQL database.
         Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query.
-        Return the Query statement and Never return the result of the query statement.
+        Return the Query statement, Never return the result of the executing the query.
 
         Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results using SELECT TOP in SQL Server syntax.
-        You can order the results by a relevant column to return the most interesting examples in the database.
-        Never query for all the columns from a specific table, only ask for a the few relevant columns given the question.
+
+        You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
+         
+        Follow the four steps below to create the correct query statement.
+
+        [STEP]
+        Step1. Fill out FROM clause
+        - Run keyword_sql_db tool and Get Table & Column Information ( Keyword's query, table name, table's columns, column's datatype, Primary Key & Foreign Key Info, Column Reference )
+        - Use all table names in 'Keyword's query'.
+        - If you insert table names into FROM clause, Go to next step.
+
+        Step2. Fill out WHERE clause
+        - If there are more than two tables with in FROM clause, Use 'JOIN' syntax and 'ALIAS' syntax, but don't use 'ON' syntax.
+        - When you use JOIN statement, Find 'Column Reference' of each table in FROM clause first, then Use 'Primary Key & Foreign Key Info' in each table to apply all columns that can be used to JOIN syntax.
+        - If you insert the columns and JOIN statement into WHERE clause, Go to next step.
+
+        Step3. Fill out GROUP BY clause
+        - Use every GROUP BY clause value in 'Keyword's query'.
+        - If '별' in 'Question', Use GROUP BY clause.
+        - If there are 'SUM' or 'COUNT' syntax in SELECT clause of 'Keyword's query', Use GROUP BY columns in 'Keyword's query'.
+        - If unit of group is mentioned in user 'Question', Use GROUP BY clause.
+
+        Step4. Fill out SELECT clause
+        - Use every SELECT clause values in 'Keyword's query'.
+        - If There are more than two tables with in FROM clause, Insert the columns into SELECT clause using 'ALIIS'.
+        - If there are 'SUM' or 'COUNT' syntax in SELECT clause of 'Keyword's query', Use SELECT columns in 'Keyword's query'.
+
+        [END]
+
+        Here is an Example below. Look at the Question, Keyword's query, Table Informaion and Fianl answer's query.
+
+        [EXAMPLE]
+        Question: Create a query that produces the 최우수자생일 and 최우수자정보.
+
+        Run keyword_sql_db tool
+
+        Keyword's query:
+        최우수자생일:SELECT 순위번호, 생년월일 FROM dbo.생일정보 WHERE 순위번호 = 1
+        최우수자정보:SELECT 이름, 순위, SUM(금액) FROM dbo.개인정보순위 = 1
+
+        Table Name: dbo.생일정보
+        (Column Name,Data Type,Max Length)
+        [('id', 'varchar', 4), ('순위번호', int), ('생년월일', 'varchar', 6)]
+        Primary Key & Foreign Key Info:
+        [('id', 'PK'), ('순위번호', 'PK')]
+        Column Reference:
+        'id' references 'id' column.
+        '순위번호' references '순위' column.
+
+        Table Name: dbo.개인정보순위
+        (Column Name,Data Type,Max Length)
+        [('id', 'varchar', 4), ('이름', 'varchar', 10), ('순위', int), ('금액', 'int')]
+        Primary Key & Foreign Key Info:
+        [('id', 'PK'), ('순위', 'PK')]
+        Column Reference:
+
+        
+        Final answer:
+        SELECT A.생년월일, B.이름, B.순위, SUM(B.금액) 
+        FROM dbo.생일정보 A, dbo.개인정보순위 B 
+        WHERE A.id = B.id 
+        AND A.순위번호 = B.순위
+        AND B.순위 = 1
+        GROUP BY A.생년월일, B.이름, B.순위
+
+        [END]
+
+        Remember that you must create only one query that matches user 'Question', not more than two queries. 
+        Check used JOIN syntax and GROUP BY clause properly.
+
         You have access to tools for interacting with the database.
         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
-        You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
 
-        DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
-        
-        Use columns in SELECT statement of KEY_QUERY on the below if you generate the query.
-        The keywords are organized as follows.
+        If you think that the 'Final Answer' is appeared soon, You should Run the query_sql_db tool first before print 'Final Answer'!
 
-        [keyword name:keywords query]
-
-        If you encounter keyword, You MUST create a query statement mixes the query of the keyword and use all the SELECT columns in the query of the keyword!
-
-        If there are more than two query statements appearing in Fianl Answer, MERGE and JOIN them neatly into one query statement.
-        
-        If '별' in Question, USE JOIN statement with '조직월기본' or '조직원월기본'.
-
-        If the question does not seem related to the database, just return string "None" as the answer.
-        If Observation value is not None, Don't return 'None' in Final Answer!
+        If you create final query, Mention 'Final Answer:' in front of the query statement.
+        If Observation value is not None, Don't return 'None' in Final Answer! But the question does not seem related to the database, just return string "None" as the answer.
+        Output must be query statement, not values of executing the query.
         """
-#  with '조직월기본' or '조직원월기본'.
+
 SQL_SUFFIX = """Begin!
 
 Question: {input}
@@ -95,10 +137,13 @@ Double check the {dialect} query above for common mistakes, including:
 - Data type mismatch in predicates
 - Properly quoting identifiers
 - Using the correct number of arguments for functions
-- When use JOIN syntax, you should use PK columns of each table.
+- Check used JOIN syntax and GROUP BY clause properly.
+- Check taht the table name of the FROM clause is in the SELECT, WHERE, GROUP BY clause.
 
 If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query.
-If you can't not find any error in query, return the query statement.
+If you can't not find any error in query, Return the query statement.
+
+Output is Only one query statement that matches the user question.
 """
 
 
@@ -272,7 +317,8 @@ class SQLDatabase:
             WHERE TABLE_NAME = '{table_name}'
             """
             pk_fk_info = eval(self.run_no_throw(get_table_pk_fk_query))
-            org_info = f"\nPrimary Key & Foreign Key Info in {table_name}:\n"
+            # org_info = f"\nPrimary Key & Foreign Key Info in {table_name}:\n"
+            org_info = f"\nPrimary Key & Foreign Key Info:\n"
 
             if pk_fk_info != []:
 
@@ -282,7 +328,24 @@ class SQLDatabase:
             
             table_info += org_info
             
-            # 3. sample row 를 일정 개수만큼만 추출 / default : _sample_rows_in_table_info = 2
+            # 3. 추출한 PK-FK 컬럼의 설명을 조회하는 쿼리
+            columns = re.sub(r'\[\]', '', columns)  # 양쪽 대괄호 제거
+            columns = re.findall(r"\('(.*?)', '(.*?)', (\d+)\)", columns)   # [(Column Name,Data Type,Max Length)] 형식의 리스트로 변환
+            table_info += f"Column Reference:\n"
+            col_names = list(map(lambda x: x[0], columns))
+
+            for col_name in col_names:
+                get_col_desc_query = f"""
+                SELECT cast(VALUE as nvarchar(100)) as column_refer 
+                FROM ::FN_LISTEXTENDEDPROPERTY(NULL, 'SCHEMA', 'dbo', 'TABLE', '{table[4:]}', 'COLUMN', '{col_name}')
+                """
+                col_desc = self.run_no_throw(get_col_desc_query)
+
+                if col_desc != '[]':
+                    col_desc = re.sub(r'[\'\(\)\[\]]', '', col_desc)[:-1]
+                    table_info += f"'{col_name}' references '{col_desc}' column\n"
+
+            # 4. sample row 를 일정 개수만큼만 추출 / default : _sample_rows_in_table_info = 2
             if self._sample_rows_in_table_info:
                 get_sample_rows_query = f"""
                 SELECT TOP {self._sample_rows_in_table_info} *
@@ -497,12 +560,12 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
     # description = """
     # Input to this tool is a detailed and correct SQL query, output is a result from the database.
     # If the query is not correct, an error message will be returned. 
-    # If an error is returned, rewrite the query, check the query, and try again or use keyword_query_sql_db again.
+    # If an error is returned, rewrite the query, check the query, and try again or use keyword_sql_db again.
     # """
     description = """
     Input to this tool is a detailed and correct SQL query, output is the Query Statement with correct answers.
     If the query is not correct, an error message will be returned. 
-    If an error is returned, rewrite the query, check the query, and try again or use keyword_query_sql_db again.
+    If an error is returned, rewrite the query, check the query, and try again or use keyword_sql_db again.
     """
 
     def _run(self, query: str) -> str:
@@ -513,17 +576,17 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
         raise NotImplementedError("QuerySqlDbTool does not support async")
 
 
-class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
-    """Tool for getting metadata about a SQL database.(a comma-separated)"""
+# class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
+#     """Tool for getting metadata about a SQL database.(a comma-separated)"""
 
-    name = "schema_sql_db"
-    description = """
-    Input to this tool is a comma-separated list of tables, output is the schema and sample rows for those tables.
-    You can know all things about table. For example Table names, Columns in each table, PK & FK info etc.
-    Be sure that the tables actually exist by calling list_tables_sql_db first!
+#     name = "schema_sql_db"
+#     description = """
+#     Input to this tool is a comma-separated list of tables, output is the schema and sample rows for those tables.
+#     You can know all things about table. For example Table names, Columns in each table, PK & FK info etc.
+#     Be sure that the tables actually exist by calling list_tables_sql_db first!
     
-    Example Input: "table1, table2, table3"
-    """
+#     Example Input: "table1, table2, table3"
+#     """
     # description = """
     # Input to this tool is a comma-separated list of tables, output is the schema for those tables.
     
@@ -548,26 +611,26 @@ class InfoSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
     # Example Input: "table1, table2, table3"
     # """
 
-    def _run(self, table_names: str) -> str:
-        """Get the schema for tables in a comma-separated list."""
-        return self.db.get_table_info_no_throw(table_names.split(", "))
+    # def _run(self, table_names: str) -> str:
+    #     """Get the schema for tables in a comma-separated list."""
+    #     return self.db.get_table_info_no_throw(table_names.split(", "))
 
-    async def _arun(self, table_name: str) -> str:
-        raise NotImplementedError("SchemaSqlDbTool does not support async")
+    # async def _arun(self, table_name: str) -> str:
+    #     raise NotImplementedError("SchemaSqlDbTool does not support async")
 
 
-class ListSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
-    """Tool for getting tables names."""
+# class ListSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
+#     """Tool for getting tables names."""
 
-    name = "list_tables_sql_db"
-    description = "Input is an empty string, output is a comma separated list of tables and list in the database."
+#     name = "list_tables_sql_db"
+#     description = "Input is an empty string, output is a comma separated list of tables and list in the database."
 
-    def _run(self, tool_input: str = "") -> str:
-        """Get the schema for a specific table."""
-        return ", ".join(self.db.get_usable_table_names())
+#     def _run(self, tool_input: str = "") -> str:
+#         """Get the schema for a specific table."""
+#         return ", ".join(self.db.get_usable_table_names())
 
-    async def _arun(self, tool_input: str = "") -> str:
-        raise NotImplementedError("ListTablesSqlDbTool does not support async")
+#     async def _arun(self, tool_input: str = "") -> str:
+#         raise NotImplementedError("ListTablesSqlDbTool does not support async")
 
 
 class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
@@ -576,7 +639,8 @@ class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
 
     name = "query_checker_sql_db"
     description = """
-    Input is a query, output is a neatly and clearly aligned query.
+    Input is a query, output is a aligned query.
+    This tool is to return query statement generated by query_sql_db tool after organizing them neatly and clearly.
     Be sure that use this tool by calling query_sql_db first!
     """
 
@@ -613,12 +677,10 @@ class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
 class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
     """Use an LLM to generate query using keyword informations."""
 
-    name = "keyword_query_sql_db"
+    name = "keyword_sql_db"
     description = """
     Input is an empty string, output is the Information for generating query that match user's question.
-    Run this tool before query_sql_db!
-
-    USE Keyword's query and columns in the queries when generate query.
+    Use this tool that Keyword's query and columns in the queries when you want to generate query.
     """
 
     # def __init__(self, db: SQLDatabase = Field(exclude=True), callback_manager: Optional[BaseCallbackManager] = None, question: str = ''):
@@ -740,9 +802,6 @@ class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
         raise NotImplementedError("KeywordQueryTool does not support async")
 
 
-
-
-
 class SQLDatabaseToolkit(BaseToolkit):
     """Toolkit for interacting with SQL databases."""
 
@@ -832,7 +891,7 @@ def create_sql_agent(
         # verbose=verbose,
         callback_manager=callback_manager,
     )
-    
+
     agent = ZeroShotAgent(llm_chain=llm_chain, allowed_tools=toolkit_names,callback_manager=callback_manager, **kwargs)
 
     return AgentExecutor.from_agent_and_tools(

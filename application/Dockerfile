@@ -20,6 +20,8 @@ COPY . /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY temp/tool.py /usr/local/lib/python3.10/site-packages/langchain/tools/sql_database/tool.py
+COPY temp/output_parser.py /usr/local/lib/python3.10/site-packages/langchain/agents/mrkl/output_parser.py
+# COPY application/temp/tool.py /usr/local/lib/python3.10/site-packages/langchain/tools/sql_database/tool.py
 
 WORKDIR /app
 ENV FLASK_APP=app.py
@@ -27,4 +29,5 @@ ENV FLASK_DEBUG=true
 
 EXPOSE 5010
 
-CMD ["gunicorn", "-w", "2", "--timeout", "120", "--bind", "0.0.0.0:5010", "wsgi:app"]
+# CMD ["gunicorn", "-w", "2", "--timeout", "120", "--bind", "0.0.0.0:5010", "wsgi:app"]
+CMD ["/bin/bash"]

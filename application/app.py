@@ -96,6 +96,7 @@ def api_answer():
     try:
 
         answer, thought = sql_agent.run(question)
+        # print(type(answer))
         # answer = answer[answer.index('SELECT'):]    # 쿼리문 외의 쓸데없는 문자열은 제거
         # print(thought)
 
