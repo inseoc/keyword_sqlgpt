@@ -37,97 +37,106 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 # from sqlalchemy.schema import CreateTable
 
 SQL_PREFIX = """
-        You are an agent designed to interact with a Microsoft Azure SQL database.
-        Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query.
-        Return the Query statement, Never return the result of the executing the query.
+    You are an agent designed to interact with a Microsoft Azure SQL database.
+    Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query.
+    Return the Query statement, Never return the result of the executing the query.
 
-        Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results using SELECT TOP in SQL Server syntax.
+    Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results using SELECT TOP in SQL Server syntax.
 
-        You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
-         
-        Follow the four steps below to create the correct query statement.
-
-        [STEP]
-        Step1. Fill out FROM clause
-        - Run keyword_sql_db tool and Get Table & Column Information ( Keyword's query, table name, table's columns, column's datatype, Primary Key & Foreign Key Info, Column Reference )
-        - Use all table names in 'Keyword's query'.
-        - If you insert table names into FROM clause, Go to next step.
-
-        Step2. Fill out WHERE clause
-        - If there are more than two tables with in FROM clause, Use 'JOIN' syntax and 'ALIAS' syntax, but don't use 'ON' syntax.
-        - When you use JOIN statement, Find 'Column Reference' of each table in FROM clause first, then Use 'Primary Key & Foreign Key Info' in each table to apply all columns that can be used to JOIN syntax.
-        - If you insert the columns and JOIN statement into WHERE clause, Go to next step.
-
-        Step3. Fill out GROUP BY clause
-        - Use every GROUP BY clause value in 'Keyword's query'.
-        - If '별' in 'Question', Use GROUP BY clause.
-        - If there are 'SUM' or 'COUNT' syntax in SELECT clause of 'Keyword's query', Use GROUP BY columns in 'Keyword's query'.
-        - If unit of group is mentioned in user 'Question', Use GROUP BY clause.
-
-        Step4. Fill out SELECT clause
-        - Use every SELECT clause values in 'Keyword's query'.
-        - If There are more than two tables with in FROM clause, Insert the columns into SELECT clause using 'ALIIS'.
-        - If there are 'SUM' or 'COUNT' syntax in SELECT clause of 'Keyword's query', Use SELECT columns in 'Keyword's query'.
-
-        [END]
-
-        Here is an Example below. Look at the Question, Keyword's query, Table Informaion and Fianl answer's query.
-
-        [EXAMPLE]
-        Question: Create a query that produces the 최우수자생일 and 최우수자정보.
-
-        Run keyword_sql_db tool
-
-        Keyword's query:
-        최우수자생일:SELECT 순위번호, 생년월일 FROM dbo.생일정보 WHERE 순위번호 = 1
-        최우수자정보:SELECT 이름, 순위, SUM(금액) FROM dbo.개인정보순위 = 1
-
-        Table Name: dbo.생일정보
-        (Column Name,Data Type,Max Length)
-        [('id', 'varchar', 4), ('순위번호', int), ('생년월일', 'varchar', 6)]
-        Primary Key & Foreign Key Info:
-        [('id', 'PK'), ('순위번호', 'PK')]
-        Column Reference:
-        'id' references 'id' column.
-        '순위번호' references '순위' column.
-
-        Table Name: dbo.개인정보순위
-        (Column Name,Data Type,Max Length)
-        [('id', 'varchar', 4), ('이름', 'varchar', 10), ('순위', int), ('금액', 'int')]
-        Primary Key & Foreign Key Info:
-        [('id', 'PK'), ('순위', 'PK')]
-        Column Reference:
-
+    You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
         
-        Final answer:
-        SELECT A.생년월일, B.이름, B.순위, SUM(B.금액) 
-        FROM dbo.생일정보 A, dbo.개인정보순위 B 
-        WHERE A.id = B.id 
-        AND A.순위번호 = B.순위
-        AND B.순위 = 1
-        GROUP BY A.생년월일, B.이름, B.순위
+    Follow the five steps below to create the correct query statement.
 
-        [END]
+    [STEP]
+    Step0. Get DATE value
+    - Run date_extactor_sql_db tool and Get DATE.
+    - If you extract DATE information, Go to next step.
 
-        Remember that you must create only one query that matches user 'Question', not more than two queries. 
-        Check used JOIN syntax and GROUP BY clause properly.
+    Step1. Fill out FROM clause
+    - Run keyword_sql_db tool and Get Table & Column Information ( Keyword's query, table name, table's columns, column's datatype, Primary Key & Foreign Key Info, Column Reference )
+    - Use all table names in "Keyword's query".
+    - If you insert table names into FROM clause, Go to next step.
 
-        You have access to tools for interacting with the database.
-        Only use the below tools. Only use the information returned by the below tools to construct your final answer.
+    Step2. Fill out WHERE clause
+    - If there are more than two tables with in FROM clause, Use 'JOIN' syntax and 'ALIAS' syntax, but DON'T USE 'ON' syntax.
+    - When you use JOIN statement, Find 'Column Reference' of each table in FROM clause first, then Use 'Primary Key & Foreign Key Info' in each table to apply all columns that can be used to JOIN syntax.
+    - If you insert the columns and JOIN statement into WHERE clause, Go to next step.
 
-        If you think that the 'Final Answer' is appeared soon, You should Run the query_sql_db tool first before print 'Final Answer'!
+    Step3. Fill out GROUP BY clause
+    - Use every GROUP BY clause value in "Keyword's query".
+    - If '별' in 'Question', Use GROUP BY clause.
+    - If there are 'SUM' or 'COUNT' syntax in SELECT clause of "Keyword's query", Use GROUP BY columns in "Keyword's query".
+    - If unit of group is mentioned in user 'Question', Use GROUP BY clause.
 
-        If you create final query, Mention 'Final Answer:' in front of the query statement.
-        If Observation value is not None, Don't return 'None' in Final Answer! But the question does not seem related to the database, just return string "None" as the answer.
-        Output must be query statement, not values of executing the query.
-        """
+    Step4. Fill out SELECT clause
+    - Use every SELECT clause values in "Keyword's query".
+    - If There are more than two tables with in FROM clause, Insert the columns into SELECT clause using 'ALIIS'.
+    - If there are 'SUM' or 'COUNT' syntax in SELECT clause of "Keyword's query", Use SELECT columns in "Keyword's query".
+    - If thers is a word '코드' in "Keyword's query", Insert the word into SELECT clause.
+
+    [END]
+
+    Here is an Example below. Look at the Question, Keyword's query, Table Informaion and Fianl answer's query.
+
+    [EXAMPLE]
+    Question: 2011년 2월 기준 최우수자생일과 최우수자정보를 산출해주는 쿼리 생성해줘.
+
+    Run date_extactor_sql_db tool
+
+    Run keyword_sql_db tool
+
+    Keyword's query:
+    최우수자생일:SELECT 순위번호, 생년월일 FROM dbo.생일정보 WHERE 순위번호 = 1 AND 기준년월 = 'YYYYMM'
+    최우수자정보:SELECT 이름, 순위, SUM(금액) FROM dbo.개인정보순위 = 1 WHERE 기준년월 = 'YYYYMM'
+
+    Table Name: dbo.생일정보
+    (Column Name,Data Type,Max Length)
+    [('id', 'varchar', 4), ('기준년월', 'varchar', 6), ('순위번호', int), ('생년월일', 'varchar', 6)]
+    Primary Key & Foreign Key Info:
+    [('id', 'PK'), ('기준년월', 'PK'), ('순위번호', 'PK')]
+    Column Reference:
+    'id' references 'id' column.
+    '순위번호' references '순위' column.
+    '기준년월' references '기준년월' column.
+
+    Table Name: dbo.개인정보순위
+    (Column Name,Data Type,Max Length)
+    [('id', 'varchar', 4), ('기준년월', 'varchar', 6), ('이름', 'varchar', 10), ('순위', int), ('금액', 'int')]
+    Primary Key & Foreign Key Info:
+    [('id', 'PK'), ('기준년월', 'PK'), ('순위', 'PK')]
+    Column Reference:
+
+    
+    Final answer:
+    SELECT A.생년월일, B.이름, B.순위, SUM(B.금액) 
+    FROM dbo.생일정보 A, dbo.개인정보순위 B 
+    WHERE A.id = B.id 
+    AND A.순위번호 = B.순위
+    AND B.순위 = 1
+    AND A.기준년월 = B.기준년월
+    AND B.기준년월 = '201102'
+    GROUP BY A.생년월일, B.이름, B.순위
+
+    [END]
+
+    Remember that you must create only one query that matches user 'Question', not more than two queries. 
+    Check used JOIN syntax and GROUP BY clause properly.
+
+    You have access to tools for interacting with the database.
+    Only use the below tools. Only use the information returned by the below tools to construct your final answer.
+
+    If you think that the 'Final Answer' is appeared soon, You should Run the query_sql_db tool first before print 'Final Answer'!
+
+    If you create final query, Mention 'Final Answer:' in front of the query statement.
+    If Observation value is not None, Don't return 'None' in Final Answer! But the question does not seem related to the database, just return string "None" as the answer.
+    Output must be query statement, not values of executing the query.
+    """
 
 SQL_SUFFIX = """Begin!
 
 Question: {input}
 Thought: I should look at the keywords in Question and see what I can query.
 {agent_scratchpad}"""
-
 
 
 QUERY_CHECKER = """
@@ -137,13 +146,57 @@ Double check the {dialect} query above for common mistakes, including:
 - Data type mismatch in predicates
 - Properly quoting identifiers
 - Using the correct number of arguments for functions
-- Check used JOIN syntax and GROUP BY clause properly.
-- Check taht the table name of the FROM clause is in the SELECT, WHERE, GROUP BY clause.
+- If you need to use 'JOIN' statement, you can use only 'AND' and '=' syntax in WHERE clause, NOT 'JOIN' and 'ON' syntax.
+- Check table name of the FROM clause is in the SELECT, WHERE, GROUP BY clause.
 
 If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query.
 If you can't not find any error in query, Return the query statement.
 
 Output is Only one query statement that matches the user question.
+"""
+
+
+DATE_EXTRACTOR = """
+You are 'DATE' extractor and your object is Extracting DATE value.
+
+Follow the below to extract the correct DATE.
+- 'Date' has to consist of number or None. Not string.
+- DATE have to be date with 'year' + 'month' + 'day' or None.
+- If there is not 'day' on DATE, the 'day' is '01'.
+- If there is not 'month' on DATE, the 'month' is '01'.
+- If there is 'DATE' in question, Return the 'DATE'. But there is not 'DATE', just Return 'None'.
+- Don't use "'" to Result.
+
+Here is an Example below.
+
+[EXAMPLE]
+Question : 2010년 8월 13일에 계약자수를 조회하는 쿼리를 생성해줘.
+Result : 20100813
+
+Question : 1995년 2월 25일 기준 월납보험료를 조회하는 쿼리를 생성해줘.
+Result : 19950225
+
+Question : 마감년월이 2017년 11월일 때, 신규단체수를 조회하는 쿼리를 생성해줘.
+Result : 20171101
+
+Question : 도입유지율을 조회하는 쿼리를 생성해줘.
+Result : None
+
+Question : 2021년 7월 월초보험료를 조회하는 쿼리를 생성해줘.
+Result : 20210701
+
+Question : 2021년 환급금비율 쿼리
+Result : 20210101
+
+Question : 신규가입자수에 대해 조회하는 쿼리를 생성해줘.
+Result : None
+
+Question : 사원별 모집인원수에 대해 2020년 5월 기준으로 조회하는 쿼리를 생성해줘.
+Result : 20200501
+[END]
+
+Question : {question}
+Result : 
 """
 
 
@@ -633,25 +686,21 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
 #         raise NotImplementedError("ListTablesSqlDbTool does not support async")
 
 
-class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
-    """Use an LLM to check if a query is correct.
-    Adapted from https://www.patterns.app/blog/2023/01/18/crunchbot-sql-analyst-gpt/"""
-
-    name = "query_checker_sql_db"
+class DateExtractorTool(BaseSQLDatabaseTool, BaseTool):
+    """Use as LLM to extract the date in user question."""
+    name = "date_extactor_sql_db"
     description = """
-    Input is a query, output is a aligned query.
-    This tool is to return query statement generated by query_sql_db tool after organizing them neatly and clearly.
-    Be sure that use this tool by calling query_sql_db first!
+    Input is an empty string, Output is DATE string or None.
+    You must Run this tool first before run the keyword_sql_db tool!
     """
-
-    # print(os.getenv('OPENAI_API_KEY'), type(os.getenv('OPENAI_API_KEY')))
-    template: str = QUERY_CHECKER
+    question: str = ''
+    template: str = DATE_EXTRACTOR
     llm_chain: LLMChain = Field(
         default_factory=lambda: LLMChain(
             # llm=AzureOpenAI(temperature=0, deployment_name=os.getenv('DEPLOYMENT_NAME'))
             llm=ChatOpenAI(temperature=0, engine=os.getenv('DEPLOYMENT_NAME')),
             prompt=PromptTemplate(
-                template=QUERY_CHECKER, input_variables=["query", "dialect"]
+                template=DATE_EXTRACTOR, input_variables=["question"]
             ),
         )
     )
@@ -659,18 +708,58 @@ class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
     @validator("llm_chain")
     def validate_llm_chain_input_variables(cls, llm_chain: LLMChain) -> LLMChain:
         """Make sure the LLM chain has the correct input variables."""
-        if llm_chain.prompt.input_variables != ["query", "dialect"]:
+        if llm_chain.prompt.input_variables != ["question"]:
             raise ValueError(
-                "LLM chain for QueryCheckerTool must have input variables ['query', 'dialect']"
+                "LLM chain for DateExtractorTool must have input variables ['question']"
             )
         return llm_chain
 
-    def _run(self, query: str) -> str:
+    def _run(self, input: str = "") -> str:
         """Use the LLM to check the query."""
-        return self.llm_chain.predict(query=query, dialect=self.db.dialect)
+        return self.llm_chain.predict(question=self.question)
 
-    async def _arun(self, query: str) -> str:
-        return await self.llm_chain.apredict(query=query, dialect=self.db.dialect)
+    async def _arun(self, input: str = "") -> str:
+        return await self.llm_chain.apredict(question=self.question)
+
+
+# class QueryCheckerTool(BaseSQLDatabaseTool, BaseTool):
+#     """Use an LLM to check if a query is correct.
+#     Adapted from https://www.patterns.app/blog/2023/01/18/crunchbot-sql-analyst-gpt/"""
+
+#     name = "query_checker_sql_db"
+#     description = """
+#     Input is a query, output is a aligned query.
+#     This tool is to return query statement generated by query_sql_db tool after organizing them neatly and clearly.
+#     Be sure that use this tool by calling query_sql_db first!
+#     """
+
+#     # print(os.getenv('OPENAI_API_KEY'), type(os.getenv('OPENAI_API_KEY')))
+#     template: str = QUERY_CHECKER
+#     llm_chain: LLMChain = Field(
+#         default_factory=lambda: LLMChain(
+#             # llm=AzureOpenAI(temperature=0, deployment_name=os.getenv('DEPLOYMENT_NAME'))
+#             llm=ChatOpenAI(temperature=0, engine=os.getenv('DEPLOYMENT_NAME')),
+#             prompt=PromptTemplate(
+#                 template=QUERY_CHECKER, input_variables=["query", "dialect"]
+#             ),
+#         )
+#     )
+
+#     @validator("llm_chain")
+#     def validate_llm_chain_input_variables(cls, llm_chain: LLMChain) -> LLMChain:
+#         """Make sure the LLM chain has the correct input variables."""
+#         if llm_chain.prompt.input_variables != ["query", "dialect"]:
+#             raise ValueError(
+#                 "LLM chain for QueryCheckerTool must have input variables ['query', 'dialect']"
+#             )
+#         return llm_chain
+
+#     def _run(self, query: str) -> str:
+#         """Use the LLM to check the query."""
+#         return self.llm_chain.predict(query=query, dialect=self.db.dialect)
+
+#     async def _arun(self, query: str) -> str:
+#         return await self.llm_chain.apredict(query=query, dialect=self.db.dialect)
 
 
 
@@ -678,9 +767,14 @@ class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
     """Use an LLM to generate query using keyword informations."""
 
     name = "keyword_sql_db"
+    # description = """
+    # Input is an empty string, output is the Information for generating query that match user's question.
+    # Use this tool that Keyword's query and columns in the queries when you want to generate query.
+    # """
     description = """
-    Input is an empty string, output is the Information for generating query that match user's question.
+    Input is a result of date_extactor_sql_db tool, output is the Information for generating query that match user's question.
     Use this tool that Keyword's query and columns in the queries when you want to generate query.
+    Don't Run this tool until date_extactor_sql_db's running end!
     """
 
     # def __init__(self, db: SQLDatabase = Field(exclude=True), callback_manager: Optional[BaseCallbackManager] = None, question: str = ''):
@@ -700,13 +794,10 @@ class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
     db: SQLDatabase = Field(exclude=True)
     callback_manager: Optional[BaseCallbackManager] = None
     question: str = ''
+    date_keywords = ['YYYYMM', 'YYYYMMDD', 'YYYY01']
 
-    def _run(self, input: str = "") -> str:
-        """Use the LLM to check the query."""
-        from datetime import datetime
-        date = datetime.today()
-        today = str(date.year)+str(date.month)  # YYYYMM 형식의 현재 날짜
-
+    def _run(self, date: str) -> str:
+        """Use the keywords and those queries to create the query."""
         flag = False
         if '별' in self.question:    # '별'에 따른 별도 키워드 동작을 위한 하드 코딩
             flag = True
@@ -727,7 +818,7 @@ class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
             for word in similar_word:
                 if word in self.question:
                     return_keyword.append(word) # 추출한 키워드를 리스트 변수(return_keyword)에 적재
-     
+
         ### 2.추출한 키워드로 매핑쿼리, 테이블 추출
         keywords = []
         results = eval(self.db.run_no_throw("SELECT 키워드, 유사어 FROM dbo.표준계수정의"))
@@ -752,7 +843,7 @@ class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
                                                       '''))
             keyword_values.append(keyword_value)    # 각 키워드에 해당하는 테이블 & 쿼리 획득(이중 리스트)
             keyword_info += f"{keyword}:{keyword_value[0][1]}\n"
-     
+
         ### 3. '별'에 따른 조직원, 조직월기본 테이블 선정 후 문자열 보관 // 하드 코딩 해결 필요
         special_keyword = {'dbo.조직월기본':
                                 ['사업부', '본부', '지원단', '지점', '영업소', '조직'], 
@@ -788,17 +879,28 @@ class KeywordQueryTool(BaseSQLDatabaseTool, BaseTool):
         ### 4. (1)키워드의 매핑쿼리, (2)매핑테이블 및 조직 테이블의 스키마 정보(테이블이름, 컬럼명, 주요-외래키)
         keyword_desc = self.db.get_table_info(keyword_table_list)
         keyword_info += f"\n{keyword_desc}"
-        today = str(202309)
-        keyword_info = keyword_info.replace("YYYYMM", today)
+        # today = str(202309)
+        # keyword_info = keyword_info.replace("YYYYMM", today)
+        if date == 'None':
+            from datetime import datetime
+            today = datetime.today()
+            date = str(today.year)+str(today.month)+str(today.day)  # yyyymmdd 형식의 현재 날짜
 
-        ### 5. 쿼리 생산을 위한 쿼리용LLM
-        pass
-
+        for idx, date_key in enumerate(self.date_keywords): # ['YYYYMM', 'YYYYMMDD', 'YYYY01']
+            
+            if (idx == 0) and (date_key in keyword_info):   
+                keyword_info = keyword_info.replace(date_key, date[:6])
+            
+            elif (idx == 1) and (date_key in keyword_info):
+                keyword_info = keyword_info.replace(date_key, date)
+    
+            elif (idx == 2) and (date_key in keyword_info):
+                keyword_info = keyword_info.replace(date_key, date[:4]+'01')
 
         return keyword_info
-    
 
-    async def _arun(self, input: str = "") -> str:
+
+    async def _arun(self, date: str) -> str:
         raise NotImplementedError("KeywordQueryTool does not support async")
 
 
@@ -825,7 +927,8 @@ class SQLDatabaseToolkit(BaseToolkit):
            QuerySQLDataBaseTool(db=self.db, callback_manager=self.callback_manager),
        #     InfoSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
         #    ListSQLDatabaseTool(db=self.db, callback_manager=self.callback_manager),
-           QueryCheckerTool(db=self.db, callback_manager=self.callback_manager),
+        #    QueryCheckerTool(db=self.db, callback_manager=self.callback_manager),
+           DateExtractorTool(db=self.db, callback_manager=self.callback_manager, question=question)
         ]
 
 
